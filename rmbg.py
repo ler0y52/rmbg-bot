@@ -1,4 +1,4 @@
-import asyncio
+import asyncio 
 import logging
 import random
 import requests
@@ -44,6 +44,9 @@ GENRES = {
     "Экшен": 28
 }
 
+# === Кеш для фильмов ===
+seen_movies = set()
+
 # === Обработчик команды /start ===
 @dp.message(Command("start"))
 async def start(message: types.Message):
@@ -58,20 +61,44 @@ async def recommend_film(message: types.Message):
 @dp.message(F.text.in_(GENRES.keys()))
 async def recommend_by_genre(message: types.Message):
     genre_id = GENRES[message.text]
-    url = f"https://api.themoviedb.org/3/discover/movie?api_key={TMDB_API_KEY}&language=ru-RU&sort_by=vote_average.desc&vote_count.gte=100&with_genres={genre_id}"
+    url = (f"https://api.themoviedb.org/3/discover/movie?api_key={TMDB_API_KEY}&language=ru-RU"
+           f"&sort_by=popularity.desc&vote_average.gte=5&vote_count.gte=500"
+           f"&with_genres={genre_id}&without_genres=16,12,10751,14"  # Исключаем анимацию, семейные, фэнтези
+           f"&page=1")
+    
     response = requests.get(url).json()
     
     if "results" in response and response["results"]:
-        movie = random.choice(response["results"])
-        title = movie["title"]
-        rating = movie["vote_average"]
-        overview = movie["overview"] if movie["overview"] else "Описание отсутствует."
-        poster_path = movie["poster_path"]
-        poster_url = f"https://image.tmdb.org/t/p/w500{poster_path}" if poster_path else None
+        movies = [m for m in response["results"] if m["id"] not in seen_movies]
         
+        if not movies:
+            await message.answer("Фильмы закончились! Попробуйте другой жанр.")
+            return
+        
+        movie = random.choice(movies)
+        seen_movies.add(movie["id"])
+        
+        title = movie.get("title", "Без названия")
+        rating = movie.get("vote_average", "Нет рейтинга")
+        overview = movie.get("overview", "Описание отсутствует.")
+        poster_path = movie.get("poster_path")
+
+        # Проверяем, есть ли постер
+        if poster_path:
+            poster_url = f"https://image.tmdb.org/t/p/w500{poster_path}"
+        else:
+            poster_url = None  # Если постера нет, ставим None
+        
+        logging.info(f"Выбран фильм: {title}, постер: {poster_url}")
+
         text = f"🎬 <b>{title}</b>\n⭐ Рейтинг: {rating}/10\n📖 {overview}"
+
         if poster_url:
-            await message.answer_photo(photo=poster_url, caption=text, parse_mode=ParseMode.HTML)
+            try:
+                await message.answer_photo(photo=poster_url, caption=text, parse_mode=ParseMode.HTML)
+            except Exception as e:
+                logging.error(f"Ошибка при отправке постера: {e}")
+                await message.answer(text, parse_mode=ParseMode.HTML)
         else:
             await message.answer(text, parse_mode=ParseMode.HTML)
     else:
